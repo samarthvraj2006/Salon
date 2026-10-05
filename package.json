@@ -1,0 +1,21 @@
+{
+  "name": "salonslot",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @salonslot/api",
+    "dev:mobile": "npm run start -w @salonslot/mobile",
+    "db:migrate": "npm run db:migrate -w @salonslot/api",
+    "db:seed": "npm run db:seed -w @salonslot/api",
+    "db:generate": "npm run db:generate -w @salonslot/api",
+    "build": "npm run build -w @salonslot/shared && npm run build -w @salonslot/api",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test -w @salonslot/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

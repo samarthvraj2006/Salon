@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: salonslot-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: salonslot
+      POSTGRES_PASSWORD: salonslot
+      POSTGRES_DB: salonslot
+    volumes:
+      - salonslot_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U salonslot -d salonslot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  salonslot_pg:
