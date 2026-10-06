@@ -8,13 +8,13 @@ function TabIcon({ label, focused }: { label: string; focused: boolean }) {
   const map: Record<string, string> = {
     Home: '⌂',
     Search: '⌕',
-    Bookings: '☰',
-    Favorites: '♥',
-    Profile: '☺',
+    Bookings: '▣',
+    Favorites: '♡',
+    Profile: '○',
   };
   return (
     <View style={{ alignItems: 'center' }}>
-      <Text style={{ fontSize: 18, color: focused ? colors.primary : colors.textSecondary }}>
+      <Text style={{ fontSize: 21, lineHeight: 24, color: focused ? colors.primary : colors.textSecondary }}>
         {map[label]}
       </Text>
       <Text style={{ fontSize: 11, color: focused ? colors.primary : colors.textSecondary, fontWeight: '600' }}>
@@ -31,9 +31,10 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarShowLabel: false,
         tabBarStyle: styles.tabBar,
+        tabBarHideOnKeyboard: true,
         tabBarBackground: () =>
-          Platform.OS === 'ios' ? (
-            <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+          Platform.OS !== 'web' ? (
+            <BlurView intensity={42} tint="light" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
           ) : (
             <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassStrong }]} />
           ),
@@ -75,7 +76,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.6)',
     backgroundColor: 'transparent',
-    elevation: 8,
+    elevation: 12,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 16,

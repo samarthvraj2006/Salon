@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   RefreshControl,
   ScrollView,
@@ -13,18 +13,19 @@ import { useRouter } from 'expo-router';
 import { Alert } from 'react-native';
 import { api } from '../../src/lib/api';
 import { useAuth } from '../../src/store/auth';
-import { GlassCard, PrimaryButton, SkeletonCard, formatINR } from '../../src/components/ui';
+import { ErrorState, GlassCard, PrimaryButton, SkeletonCard, formatINR } from '../../src/components/ui';
 import { SalonCard } from '../../src/components/cards';
 import { colors, space } from '../../src/theme';
 
 export default function HomeScreen() {
   const user = useAuth((s) => s.user);
   const router = useRouter();
+  const [mix, setMix] = useState('initial');
   const feed = useQuery({
-    queryKey: ['home-feed', user?.city],
+    queryKey: ['home-feed', user?.city, user?.lat, user?.lng, mix],
     queryFn: () =>
       api<{ cards: any[] }>(
-        `/api/v1/home/feed?city=${encodeURIComponent(user?.city ?? '')}&lat=${user?.lat ?? ''}&lng=${user?.lng ?? ''}`,
+        `/api/v1/home/feed?city=${encodeURIComponent(user?.city ?? '')}&lat=${user?.lat ?? ''}&lng=${user?.lng ?? ''}&mix=${encodeURIComponent(mix)}`,
       ),
   });
 
@@ -32,10 +33,14 @@ export default function HomeScreen() {
     <View style={styles.wrap}>
       <GlassCard style={styles.header}>
         <Pressable onPress={() => router.push('/location')}>
-          <Text style={styles.loc}>📍 {user?.city ?? 'Select city'}</Text>
+          <Text style={styles.eyebrow}>YOUR LOCATION</Text>
+          <Text style={styles.loc}>⌖  {user?.city ?? 'Select city'}  ⌄</Text>
         </Pressable>
-        <Pressable onPress={() => router.push('/notifications')}>
-          <Text style={{ fontSize: 20 }}>🔔</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open profile" onPress={() => router.push('/(tabs)/profile')} style={styles.avatar}>
+          <Text style={styles.avatarText}>{user?.name?.slice(0, 1)?.toUpperCase() ?? 'S'}</Text>
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Open notifications" onPress={() => router.push('/notifications')} style={styles.bell}>
+          <Text style={{ fontSize: 18 }}>♧</Text>
         </Pressable>
       </GlassCard>
       <Pressable onPress={() => router.push('/(tabs)/search')}>
@@ -51,7 +56,7 @@ export default function HomeScreen() {
 
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
-        refreshControl={<RefreshControl refreshing={feed.isFetching} onRefresh={() => feed.refetch()} />}
+        refreshControl={<RefreshControl refreshing={feed.isFetching} onRefresh={() => setMix(String(Date.now()))} tintColor={colors.primary} colors={[colors.primary]} />}
       >
         {feed.isLoading ? (
           <>
@@ -59,10 +64,12 @@ export default function HomeScreen() {
             <SkeletonCard />
           </>
         ) : null}
-        {feed.isError ? (
-          <GlassCard>
-            <Text>Could not load feed. Pull to retry.</Text>
-            <PrimaryButton title="Retry" onPress={() => feed.refetch()} />
+        {feed.isError ? <ErrorState title="Couldn’t load your feed" retry={() => feed.refetch()} /> : null}
+        {!feed.isLoading && !feed.isError && !feed.data?.cards?.length ? (
+          <GlassCard style={styles.card}>
+            <Text style={styles.title}>A better salon visit starts here</Text>
+            <Text style={styles.muted}>Explore trusted salons and book a time that works for you.</Text>
+            <PrimaryButton title="Find a salon" onPress={() => router.push('/(tabs)/search')} />
           </GlassCard>
         ) : null}
         {(feed.data?.cards ?? []).map((card) => (
@@ -81,7 +88,7 @@ function FeedCard({ card }: { card: any }) {
     case 'NextAppointmentCard':
       return (
         <GlassCard style={styles.card} onPress={() => router.push(`/booking/pass/${p.id}`)}>
-          <Text style={styles.kicker}>Your Next Appointment</Text>
+          <Text style={styles.kicker}>YOUR NEXT APPOINTMENT</Text>
           <Text style={styles.title}>{p.salon?.place?.name}</Text>
           <Text style={styles.muted}>
             {p.services?.[0]?.service?.name} · {new Date(p.startTime).toLocaleString('en-IN')}
@@ -130,7 +137,7 @@ function FeedCard({ card }: { card: any }) {
           <Text style={[styles.kicker, { marginBottom: 8 }]}>Nearby salons</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {(p.items ?? []).map((s: any) => (
-              <SalonCard key={s.id} item={s} onPress={() => router.push(`/salon/${s.id}`)} />
+              <SalonCard key={s.id} item={s} horizontal onPress={() => router.push(`/salon/${s.id}`)} />
             ))}
           </ScrollView>
         </View>
@@ -186,10 +193,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
   },
-  loc: { fontWeight: '700', color: colors.text },
+  eyebrow: { fontWeight: '700', color: colors.textSecondary, fontSize: 10, letterSpacing: 1 },
+  loc: { fontWeight: '800', color: colors.text, marginTop: 2 },
+  avatar: { width: 42, height: 42, borderRadius: 22, marginLeft: 'auto', backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: colors.primary, fontSize: 17, fontWeight: '800' },
+  bell: { width: 42, height: 42, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.72)', alignItems: 'center', justifyContent: 'center' },
   card: { marginBottom: 12 },
   kicker: { color: colors.primary, fontWeight: '700', marginBottom: 4 },
   title: { fontSize: 18, fontWeight: '800', color: colors.text, marginBottom: 8 },

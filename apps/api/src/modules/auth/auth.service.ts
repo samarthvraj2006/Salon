@@ -22,13 +22,17 @@ export async function exchangeFirebaseToken(input: unknown) {
   let emailVerified = false;
 
   if (env.AUTH_MODE === 'mock') {
-    // Mock token format: mock:<phone|email>:<name?>
+    // Mock format: mock:<phone>:<otp>:<name>. Non-phone demo identities are for
+    // local provider previews only; production mode never accepts this format.
     const parts = body.idToken.split(':');
     if (parts[0] !== 'mock' || !parts[1]) {
       throw new AppError(401, 'INVALID_TOKEN', 'Invalid mock token. Use mock:<phone>');
     }
     const identity = parts[1];
     if (/^[6-9]\d{9}$/.test(identity)) {
+      if (parts[2] !== '123456') {
+        throw new AppError(401, 'INVALID_OTP', 'In demo mode use OTP 123456');
+      }
       phone = identity;
       phoneVerified = true;
       uid = `mock-phone-${identity}`;
@@ -37,7 +41,7 @@ export async function exchangeFirebaseToken(input: unknown) {
       emailVerified = true;
       uid = `mock-email-${identity}`;
     }
-    name = body.name ?? parts[2] ?? 'Demo User';
+    name = body.name ?? (phone ? parts.slice(3).join(':') : parts[2]) ?? 'Demo User';
   } else {
     const decoded = await verifyFirebaseIdToken(body.idToken);
     uid = decoded.uid;

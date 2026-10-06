@@ -23,10 +23,16 @@ export async function listSalons(rawQuery: unknown) {
     include: {
       place: true,
       services: { where: { isActive: true }, orderBy: { priceInr: 'asc' }, take: 1 },
+      workingHours: true,
     },
   });
 
-  let rows = withDistance(places, q.lat, q.lng);
+  let rows = withDistance(places, q.lat, q.lng).map((row) => ({
+    ...row,
+    place: { ...row.place, isOpen: isOpenAt(row.workingHours) },
+    nextAvailable: null as string | null,
+    nextAvailableSortKey: '9999-99-99 99:99',
+  }));
 
   if (q.city) rows = rows.filter((r) => r.place.city.toLowerCase() === q.city!.toLowerCase());
   if (q.q) {
@@ -51,7 +57,31 @@ export async function listSalons(rawQuery: unknown) {
     rows = rows.filter((r) => ids.has(r.id));
   }
 
-  switch (q.sort) {
+  if (q.availableToday || q.sort === 'earliest') {
+    const today = istDate();
+    const withSlots = await Promise.all(rows.map(async (row) => {
+      const serviceId = row.services[0]?.id;
+      if (!serviceId) return { ...row, nextAvailable: null as string | null, nextAvailableSortKey: '9999-99-99 99:99' };
+      const horizon = q.availableToday ? 1 : 7;
+      for (let offset = 0; offset < horizon; offset++) {
+        const date = addDays(today, offset);
+        const slots = await getSalonSlots({ salonId: row.id, date, serviceIds: [serviceId], staffId: 'any' });
+        if (slots.nextAvailable) {
+          const label = offset === 0 ? slots.nextAvailable : `${date} · ${slots.nextAvailable}`;
+          return { ...row, nextAvailable: label, nextAvailableSortKey: `${date} ${slots.nextAvailable}` };
+        }
+      }
+      return { ...row, nextAvailable: null as string | null, nextAvailableSortKey: '9999-99-99 99:99' };
+    }));
+    rows = q.availableToday ? withSlots.filter((row) => row.nextAvailable != null) : withSlots;
+    if (q.sort === 'earliest') {
+      rows.sort((a, b) => {
+        return a.nextAvailableSortKey.localeCompare(b.nextAvailableSortKey);
+      });
+    }
+  }
+
+  if (q.sort !== 'earliest') switch (q.sort) {
     case 'rating':
       rows.sort((a, b) => b.place.rating - a.place.rating);
       break;
@@ -75,7 +105,7 @@ export async function getSalon(id: string, lat?: number, lng?: number) {
       include: {
         place: true,
         workingHours: true,
-        services: { where: { isActive: true }, include: { category: true } },
+        services: { where: { isActive: true }, include: { category: true }, orderBy: { priceInr: 'asc' } },
         staff: { where: { isActive: true }, include: { services: true } },
         reviews: {
           take: 20,
@@ -85,6 +115,7 @@ export async function getSalon(id: string, lat?: number, lng?: number) {
       },
     }),
   );
+  salon.place.isOpen = isOpenAt(salon.workingHours);
   const [withDist] = withDistance([salon], lat, lng);
   const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
   const primary = salon.services[0];
@@ -99,6 +130,25 @@ export async function getSalon(id: string, lat?: number, lng?: number) {
     nextAvailable = slots.nextAvailable;
   }
   return { ...withDist, nextAvailable };
+}
+
+function istDate() {
+  return new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+}
+
+function addDays(date: string, days: number) {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function isOpenAt(hours: Array<{ dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }>) {
+  const shifted = new Date(Date.now() + 330 * 60_000);
+  const row = hours.find((item) => item.dayOfWeek === shifted.getUTCDay());
+  if (!row || row.isClosed) return false;
+  const current = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+  const [openHour, openMinute] = row.openTime.split(':').map(Number);
+  const [closeHour, closeMinute] = row.closeTime.split(':').map(Number);
+  return current >= openHour * 60 + openMinute && current < closeHour * 60 + closeMinute;
 }
 
 export async function listPlacesNearby(query: {

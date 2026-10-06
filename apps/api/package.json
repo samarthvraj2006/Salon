@@ -8,10 +8,11 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma db push && prisma generate && tsx prisma/apply-constraints.ts",
+    "db:migrate": "prisma migrate deploy && prisma generate",
     "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
-    "db:push": "prisma db push",
+    "db:push": "prisma db push && prisma generate && tsx prisma/apply-constraints.ts",
+    "db:ensure-constraints": "tsx prisma/apply-constraints.ts",
     "test": "vitest run",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

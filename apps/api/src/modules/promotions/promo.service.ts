@@ -1,4 +1,5 @@
 import { promotionValidateSchema } from '@salonslot/shared';
+import { Prisma } from '@prisma/client';
 import { AppError, assertFound } from '../../lib/errors';
 import { prisma } from '../../lib/prisma';
 
@@ -15,14 +16,16 @@ export async function listPromotions(city?: string) {
   });
 }
 
+type PromoDb = Pick<Prisma.TransactionClient, 'promotion' | 'appointment'>;
+
 export async function validateAndQuotePromo(input: {
   code: string;
   salonId: string;
   amount: number;
   userId: string;
-}) {
+}, db: PromoDb = prisma) {
   const promo = assertFound(
-    await prisma.promotion.findFirst({
+    await db.promotion.findFirst({
       where: {
         code: input.code.toUpperCase(),
         isActive: true,
@@ -42,7 +45,7 @@ export async function validateAndQuotePromo(input: {
     throw new AppError(400, 'COUPON_EXHAUSTED', 'Coupon usage limit reached');
   }
   if (promo.firstBookingOnly) {
-    const prior = await prisma.appointment.count({
+    const prior = await db.appointment.count({
       where: { customerId: input.userId, status: { not: 'CANCELLED' } },
     });
     if (prior > 0) throw new AppError(400, 'COUPON_FIRST_ONLY', 'First booking only');

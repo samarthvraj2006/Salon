@@ -10,6 +10,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@react-native-firebase/app": "^21.7.3",
+    "@react-native-firebase/auth": "^21.7.3",
     "@react-native-google-signin/google-signin": "^13.2.0",
     "@salonslot/shared": "*",
     "@tanstack/react-query": "^5.69.0",

@@ -19,6 +19,7 @@ async function main() {
 
 main()
   .catch((e) => {
-    console.warn('Constraint apply skipped/failed:', e.message);
+    console.error('Constraint apply failed:', e);
+    process.exitCode = 1;
   })
   .finally(() => prisma.$disconnect());

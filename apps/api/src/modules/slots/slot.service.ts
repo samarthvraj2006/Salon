@@ -1,4 +1,5 @@
 import { AppointmentStatus } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { AppError, assertFound } from '../../lib/errors';
 import { prisma } from '../../lib/prisma';
 import {
@@ -11,15 +12,38 @@ import {
 } from './slot.utils';
 
 const BUFFER_MIN = 15;
+const IST_OFFSET_MIN = 330;
+
+function istDateKey(date: Date) {
+  return new Date(date.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
+}
+
+function istMinuteOfDay(date: Date) {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MIN * 60_000);
+  return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+}
+
+type SlotDb = Pick<Prisma.TransactionClient, 'salon'>;
 
 export async function getSalonSlots(input: {
   salonId: string;
   date: string;
   serviceIds: string[];
   staffId?: string | 'any';
+  excludeAppointmentId?: string;
+}) {
+  return getSalonSlotsWithClient(prisma, input);
+}
+
+export async function getSalonSlotsWithClient(db: SlotDb, input: {
+  salonId: string;
+  date: string;
+  serviceIds: string[];
+  staffId?: string | 'any';
+  excludeAppointmentId?: string;
 }) {
   const salon = assertFound(
-    await prisma.salon.findUnique({
+    await db.salon.findUnique({
       where: { id: input.salonId },
       include: {
         workingHours: true,
@@ -33,6 +57,7 @@ export async function getSalonSlots(input: {
             appointments: {
               where: {
                 date: new Date(input.date),
+                id: input.excludeAppointmentId ? { not: input.excludeAppointmentId } : undefined,
                 status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
               },
             },
@@ -49,7 +74,11 @@ export async function getSalonSlots(input: {
   }
 
   const duration = salon.services.reduce((s, x) => s + x.durationMin, 0);
-  const day = new Date(input.date);
+  const [year, month, date] = input.date.split('-').map(Number);
+  const day = new Date(Date.UTC(year, month - 1, date));
+  if (day.toISOString().slice(0, 10) !== input.date) {
+    throw new AppError(400, 'INVALID_DATE', 'Choose a valid calendar date');
+  }
   const dow = day.getUTCDay();
 
   if (salon.holidays.some((h) => h.date.toISOString().slice(0, 10) === input.date)) {
@@ -66,17 +95,14 @@ export async function getSalonSlots(input: {
   const grid = buildSlotTimes(openMin, closeMin, duration, salon.slotIntervalMin);
 
   const now = new Date();
-  const todayStr = new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
-  const nowMin =
-    todayStr === input.date
-      ? now.getUTCHours() * 60 + now.getUTCMinutes() + 330 + BUFFER_MIN
-      : -1;
+  const todayStr = istDateKey(now);
+  const nowMin = todayStr === input.date ? istMinuteOfDay(now) + BUFFER_MIN : -1;
 
   const salonBlocks: Interval[] = salon.blockedSlots
-    .filter((b) => b.startTime.toISOString().slice(0, 10) === input.date && !b.staffId)
+    .filter((b) => istDateKey(b.startTime) === input.date && !b.staffId)
     .map((b) => ({
-      start: b.startTime.getUTCHours() * 60 + b.startTime.getUTCMinutes() + 330,
-      end: b.endTime.getUTCHours() * 60 + b.endTime.getUTCMinutes() + 330,
+      start: istMinuteOfDay(b.startTime),
+      end: istMinuteOfDay(b.endTime),
     }));
 
   let candidates = salon.staff.filter((st) =>
@@ -105,14 +131,14 @@ export async function getSalonSlots(input: {
         }
       }
       const apptBlocks: Interval[] = st.appointments.map((a) => ({
-        start: a.startTime.getUTCHours() * 60 + a.startTime.getUTCMinutes() + 330,
-        end: a.endTime.getUTCHours() * 60 + a.endTime.getUTCMinutes() + 330,
+        start: istMinuteOfDay(a.startTime),
+        end: istMinuteOfDay(a.endTime),
       }));
       const staffBlocks: Interval[] = salon.blockedSlots
-        .filter((b) => b.staffId === st.id && b.startTime.toISOString().slice(0, 10) === input.date)
+        .filter((b) => b.staffId === st.id && istDateKey(b.startTime) === input.date)
         .map((b) => ({
-          start: b.startTime.getUTCHours() * 60 + b.startTime.getUTCMinutes() + 330,
-          end: b.endTime.getUTCHours() * 60 + b.endTime.getUTCMinutes() + 330,
+          start: istMinuteOfDay(b.startTime),
+          end: istMinuteOfDay(b.endTime),
         }));
       if (isBlocked(startMin, endMin, [...apptBlocks, ...staffBlocks])) continue;
       staffIds.push(st.id);

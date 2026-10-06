@@ -24,12 +24,13 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   return a;
 }
 
-export async function getHomeFeed(userId?: string, lat?: number, lng?: number, city?: string) {
+export async function getHomeFeed(userId?: string, lat?: number, lng?: number, city?: string, mix = '') {
   const cards: HomeFeedCard[] = [];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+  const mixHash = [...mix].reduce((sum, char) => sum * 31 + char.charCodeAt(0), 0);
   const seedBase =
     (userId ? [...userId].reduce((s, c) => s + c.charCodeAt(0), 0) : 42) +
-    Number(today.replace(/-/g, ''));
+    Number(today.replace(/-/g, '')) + mixHash;
 
   if (userId) {
     const next = await prisma.appointment.findFirst({

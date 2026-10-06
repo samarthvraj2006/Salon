@@ -42,15 +42,17 @@ export const useAuth = create<AuthState>((set) => ({
     set({ accessToken: null, refreshToken: null, user: null });
   },
   hydrate: async () => {
-    const accessToken = await SecureStore.getItemAsync('accessToken');
-    const refreshToken = await SecureStore.getItemAsync('refreshToken');
-    const userRaw = await SecureStore.getItemAsync('user');
-    set({
-      accessToken,
-      refreshToken,
-      user: userRaw ? JSON.parse(userRaw) : null,
-      hydrated: true,
-    });
+    try {
+      const accessToken = await SecureStore.getItemAsync('accessToken');
+      const refreshToken = await SecureStore.getItemAsync('refreshToken');
+      const userRaw = await SecureStore.getItemAsync('user');
+      set({ accessToken, refreshToken, user: userRaw ? JSON.parse(userRaw) : null, hydrated: true });
+    } catch {
+      await SecureStore.deleteItemAsync('accessToken');
+      await SecureStore.deleteItemAsync('refreshToken');
+      await SecureStore.deleteItemAsync('user');
+      set({ accessToken: null, refreshToken: null, user: null, hydrated: true });
+    }
   },
   setUser: (user) => {
     SecureStore.setItemAsync('user', JSON.stringify(user));

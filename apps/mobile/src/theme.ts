@@ -6,12 +6,14 @@ export const colors = {
   accent: '#2ECC8F',
   text: '#111827',
   textSecondary: '#6B7280',
+  textDisabled: '#9CA3AF',
   success: '#16A34A',
   warning: '#F59E0B',
+  warningDark: '#9A6700',
   error: '#DC2626',
-  border: 'rgba(255,255,255,0.6)',
-  glass: 'rgba(255,255,255,0.65)',
-  glassStrong: 'rgba(255,255,255,0.9)',
+  border: 'rgba(255,255,255,0.78)',
+  glass: 'rgba(255,255,255,0.62)',
+  glassStrong: 'rgba(255,255,255,0.92)',
 };
 
 export const radius = { card: 20, button: 16, chip: 999 };

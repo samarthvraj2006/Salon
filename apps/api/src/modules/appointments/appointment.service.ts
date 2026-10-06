@@ -1,66 +1,59 @@
 import { AppointmentStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { randomInt } from 'crypto';
 import { createAppointmentSchema, cancelAppointmentSchema, rescheduleSchema } from '@salonslot/shared';
 import { AppError, assertFound } from '../../lib/errors';
 import { prisma } from '../../lib/prisma';
-import { getSalonSlots, combineDateAndTime } from '../slots/slot.service';
+import { getSalonSlotsWithClient, combineDateAndTime } from '../slots/slot.service';
 import { parseHm } from '../slots/slot.utils';
 import { validateAndQuotePromo } from '../promotions/promo.service';
 import { notifyUser } from '../notifications/notify.service';
+import { refundPaymentForCancellation } from '../payments/payment.service';
 
 function bookingCode() {
-  return `SS${Math.floor(10000000 + Math.random() * 90000000)}`;
+  return `SS${randomInt(10_000_000, 100_000_000)}`;
 }
 
 export async function createAppointment(userId: string, raw: unknown) {
   const input = createAppointmentSchema.parse(raw);
-  const salon = assertFound(
-    await prisma.salon.findUnique({
-      where: { id: input.salonId },
-      include: { services: { where: { id: { in: input.serviceIds } } }, place: true },
-    }),
-  );
-  if (salon.services.length !== input.serviceIds.length) {
-    throw new AppError(400, 'INVALID_SERVICES', 'Invalid services');
-  }
-
-  const duration = salon.services.reduce((s, x) => s + x.durationMin, 0);
-  const subtotal = salon.services.reduce((s, x) => s + x.priceInr, 0);
-  let discount = 0;
-  let promoId: string | undefined;
-  if (input.couponCode) {
-    const quote = await validateAndQuotePromo({
-      code: input.couponCode,
-      salonId: salon.id,
-      amount: subtotal,
-      userId,
-    });
-    discount = quote.discount;
-    promoId = quote.promotionId;
-  }
-  const total = Math.max(0, subtotal - discount);
-
-  const slotInfo = await getSalonSlots({
-    salonId: salon.id,
-    date: input.date,
-    serviceIds: input.serviceIds,
-    staffId: input.staffId ?? 'any',
-  });
-  const slot = slotInfo.slots.find((s) => s.time === input.startTime && s.available);
-  if (!slot || slot.staffIds.length === 0) {
-    throw new AppError(409, 'SLOT_TAKEN', 'Selected slot is no longer available');
-  }
-  const staffId = input.staffId && slot.staffIds.includes(input.staffId)
-    ? input.staffId
-    : slot.staffIds[0];
-
-  const startTime = combineDateAndTime(input.date, input.startTime);
-  const endMin = parseHm(input.startTime) + duration;
-  const endHm = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
-  const endTime = combineDateAndTime(input.date, endHm);
-
   try {
     const appointment = await prisma.$transaction(
       async (tx) => {
+        const salon = assertFound(await tx.salon.findUnique({
+          where: { id: input.salonId },
+          include: { services: { where: { id: { in: input.serviceIds }, isActive: true } }, place: true },
+        }));
+        if (salon.services.length !== input.serviceIds.length) {
+          throw new AppError(400, 'INVALID_SERVICES', 'One or more selected services are no longer available');
+        }
+
+        const duration = salon.services.reduce((sum, service) => sum + service.durationMin, 0);
+        const subtotal = salon.services.reduce((sum, service) => sum + service.priceInr, 0);
+        const quote = input.couponCode
+          ? await validateAndQuotePromo({ code: input.couponCode, salonId: salon.id, amount: subtotal, userId }, tx)
+          : undefined;
+        const discount = quote?.discount ?? 0;
+        const total = Math.max(0, subtotal - discount);
+
+        // Availability, staff eligibility, working hours, breaks and blocks are
+        // read again in this serializable transaction immediately before insert.
+        const slotInfo = await getSalonSlotsWithClient(tx, {
+          salonId: salon.id,
+          date: input.date,
+          serviceIds: input.serviceIds,
+          staffId: input.staffId ?? 'any',
+        });
+        const slot = slotInfo.slots.find((candidate) => candidate.time === input.startTime && candidate.available);
+        if (!slot?.staffIds.length) throw new AppError(409, 'SLOT_TAKEN', 'Selected slot is no longer available');
+        if (input.staffId && !slot.staffIds.includes(input.staffId)) {
+          throw new AppError(409, 'STAFF_UNAVAILABLE', 'Selected stylist is not available for this slot');
+        }
+        const staffId = input.staffId ?? slot.staffIds[0];
+        const startTime = combineDateAndTime(input.date, input.startTime);
+        const endMin = parseHm(input.startTime) + duration;
+        if (endMin > 24 * 60) throw new AppError(400, 'INVALID_SLOT', 'Appointment cannot continue past midnight');
+        const endHm = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+        const endTime = combineDateAndTime(input.date, endHm);
+
         const conflict = await tx.appointment.findFirst({
           where: {
             staffId,
@@ -69,7 +62,14 @@ export async function createAppointment(userId: string, raw: unknown) {
             endTime: { gt: startTime },
           },
         });
-        if (conflict) throw new AppError(409, 'SLOT_TAKEN', 'Slot taken');
+        if (conflict) throw new AppError(409, 'SLOT_TAKEN', 'Selected slot is no longer available');
+
+        if (quote) {
+          const currentPromo = await tx.promotion.findUnique({ where: { id: quote.promotionId } });
+          if (!currentPromo || (currentPromo.usageLimit != null && currentPromo.usedCount >= currentPromo.usageLimit)) {
+            throw new AppError(409, 'COUPON_EXHAUSTED', 'Coupon usage limit reached');
+          }
+        }
 
         const appt = await tx.appointment.create({
           data: {
@@ -81,10 +81,7 @@ export async function createAppointment(userId: string, raw: unknown) {
             startTime,
             endTime,
             status: AppointmentStatus.CONFIRMED,
-            paymentStatus:
-              input.paymentMethod === 'ONLINE'
-                ? PaymentStatus.PENDING
-                : PaymentStatus.PAY_AT_SALON,
+            paymentStatus: input.paymentMethod === 'ONLINE' ? PaymentStatus.PENDING : PaymentStatus.PAY_AT_SALON,
             totalAmount: total,
             discountAmount: discount,
             services: {
@@ -103,17 +100,17 @@ export async function createAppointment(userId: string, raw: unknown) {
           },
         });
 
-        if (promoId) {
+        if (quote) {
           await tx.promotionRedemption.create({
             data: {
-              promotionId: promoId,
+              promotionId: quote.promotionId,
               userId,
               appointmentId: appt.id,
               discountAmount: discount,
             },
           });
           await tx.promotion.update({
-            where: { id: promoId },
+            where: { id: quote.promotionId },
             data: { usedCount: { increment: 1 } },
           });
         }
@@ -124,14 +121,14 @@ export async function createAppointment(userId: string, raw: unknown) {
 
     await notifyUser(userId, {
       title: 'Booking confirmed',
-      body: `Your appointment at ${salon.place.name} is confirmed (${appointment.bookingCode}).`,
+      body: `Your appointment at ${appointment.salon.place.name} is confirmed (${appointment.bookingCode}).`,
       data: { appointmentId: appointment.id, type: 'booking_confirmed' },
     });
 
     return appointment;
   } catch (e) {
     if (e instanceof AppError) throw e;
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2004', 'P2034'].includes(e.code)) {
       throw new AppError(409, 'SLOT_TAKEN', 'Slot taken');
     }
     throw e;
@@ -197,14 +194,7 @@ export async function cancelAppointment(userId: string, id: string, raw: unknown
   });
 
   if (appt.paymentStatus === PaymentStatus.PAID && appt.payment) {
-    await prisma.payment.update({
-      where: { id: appt.payment.id },
-      data: { status: PaymentStatus.REFUNDED },
-    });
-    await prisma.appointment.update({
-      where: { id },
-      data: { paymentStatus: PaymentStatus.REFUNDED },
-    });
+    await refundPaymentForCancellation(appt.payment);
   }
 
   const waitlist = await prisma.waitlist.findMany({
@@ -225,7 +215,9 @@ export async function cancelAppointment(userId: string, id: string, raw: unknown
     body: `Booking ${appt.bookingCode} was cancelled.`,
     data: { type: 'booking_cancelled', appointmentId: id },
   });
-  return updated;
+  return appt.paymentStatus === PaymentStatus.PAID
+    ? prisma.appointment.findUniqueOrThrow({ where: { id }, include: { salon: { include: { place: true } }, staff: true, services: { include: { service: true } }, payment: true } })
+    : updated;
 }
 
 export async function rescheduleAppointment(userId: string, id: string, raw: unknown) {
@@ -240,38 +232,50 @@ export async function rescheduleAppointment(userId: string, id: string, raw: unk
   }
   const serviceIds = appt.services.map((s) => s.serviceId);
   const duration = appt.services.reduce((s, x) => s + x.durationMin, 0);
-  const slotInfo = await getSalonSlots({
-    salonId: appt.salonId,
-    date: input.date,
-    serviceIds,
-    staffId: input.staffId ?? 'any',
-  });
-  const slot = slotInfo.slots.find((s) => s.time === input.startTime && s.available);
-  if (!slot?.staffIds.length) throw new AppError(409, 'SLOT_TAKEN', 'Slot unavailable');
-  const staffId =
-    input.staffId && slot.staffIds.includes(input.staffId) ? input.staffId : slot.staffIds[0];
-  const startTime = combineDateAndTime(input.date, input.startTime);
-  const endMin = parseHm(input.startTime) + duration;
-  const endHm = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
-  const endTime = combineDateAndTime(input.date, endHm);
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const slotInfo = await getSalonSlotsWithClient(tx, {
+        salonId: appt.salonId,
+        date: input.date,
+        serviceIds,
+        staffId: input.staffId ?? 'any',
+        excludeAppointmentId: id,
+      });
+      const slot = slotInfo.slots.find((candidate) => candidate.time === input.startTime && candidate.available);
+      if (!slot?.staffIds.length) throw new AppError(409, 'SLOT_TAKEN', 'Slot unavailable');
+      if (input.staffId && !slot.staffIds.includes(input.staffId)) {
+        throw new AppError(409, 'STAFF_UNAVAILABLE', 'Selected stylist is not available for this slot');
+      }
+      const staffId = input.staffId ?? slot.staffIds[0];
+      const startTime = combineDateAndTime(input.date, input.startTime);
+      const endMin = parseHm(input.startTime) + duration;
+      if (endMin > 24 * 60) throw new AppError(400, 'INVALID_SLOT', 'Appointment cannot continue past midnight');
+      const endHm = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+      const endTime = combineDateAndTime(input.date, endHm);
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const conflict = await tx.appointment.findFirst({
-      where: {
-        staffId,
-        id: { not: id },
-        status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
-        startTime: { lt: endTime },
-        endTime: { gt: startTime },
-      },
-    });
-    if (conflict) throw new AppError(409, 'SLOT_TAKEN', 'Slot taken');
-    return tx.appointment.update({
-      where: { id },
-      data: { date: new Date(input.date), startTime, endTime, staffId },
-      include: { salon: { include: { place: true } }, staff: true, services: { include: { service: true } } },
-    });
-  });
+      const conflict = await tx.appointment.findFirst({
+        where: {
+          staffId,
+          id: { not: id },
+          status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
+          startTime: { lt: endTime },
+          endTime: { gt: startTime },
+        },
+      });
+      if (conflict) throw new AppError(409, 'SLOT_TAKEN', 'Slot taken');
+      return tx.appointment.update({
+        where: { id },
+        data: { date: new Date(input.date), startTime, endTime, staffId },
+        include: { salon: { include: { place: true } }, staff: true, services: { include: { service: true } } },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2002', 'P2004', 'P2034'].includes(error.code)) {
+      throw new AppError(409, 'SLOT_TAKEN', 'Slot taken');
+    }
+    throw error;
+  }
 
   await notifyUser(userId, {
     title: 'Booking rescheduled',

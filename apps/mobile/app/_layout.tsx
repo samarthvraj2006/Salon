@@ -2,11 +2,17 @@ import React, { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../src/store/auth';
 import { colors } from '../src/theme';
 
-const qc = new QueryClient();
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: { staleTime: 30_000, gcTime: 5 * 60_000, retry: 1, refetchOnWindowFocus: false },
+    mutations: { retry: 0 },
+  },
+});
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { hydrated, hydrate, accessToken, user } = useAuth();
@@ -35,12 +41,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <QueryClientProvider client={qc}>
-        <AuthGate>
-          <StatusBar style="dark" />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
-        </AuthGate>
-      </QueryClientProvider>
+      <SafeAreaProvider>
+        <QueryClientProvider client={qc}>
+          <AuthGate>
+            <StatusBar style="dark" backgroundColor={colors.bg} />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.bg },
+                animation: 'slide_from_right',
+                animationDuration: 220,
+              }}
+            />
+          </AuthGate>
+        </QueryClientProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

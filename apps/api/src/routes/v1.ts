@@ -16,7 +16,6 @@ import * as promoService from '../promotions/promo.service';
 import * as paymentService from '../payments/payment.service';
 import * as homeService from '../home/home.service';
 import { getSalonSlots } from '../slots/slot.service';
-import { getPaymentProvider } from '../payments/providers';
 
 export const v1Router = Router();
 
@@ -25,6 +24,7 @@ v1Router.get('/home/feed', optionalAuth, async (req, res, next) => {
     const lat = req.query.lat ? Number(req.query.lat) : req.user ? undefined : undefined;
     const lng = req.query.lng ? Number(req.query.lng) : undefined;
     const city = typeof req.query.city === 'string' ? req.query.city : undefined;
+    const mix = typeof req.query.mix === 'string' ? req.query.mix : '';
     let userLat = lat;
     let userLng = lng;
     let userCity = city;
@@ -35,7 +35,7 @@ v1Router.get('/home/feed', optionalAuth, async (req, res, next) => {
       userCity = city ?? u?.city ?? undefined;
     }
     res.json({
-      cards: await homeService.getHomeFeed(req.user?.id, userLat, userLng, userCity),
+      cards: await homeService.getHomeFeed(req.user?.id, userLat, userLng, userCity, mix),
     });
   } catch (e) {
     next(e);
@@ -367,9 +367,13 @@ v1Router.post('/payments/verify', requireAuth, async (req, res, next) => {
 
 v1Router.post('/payments/webhook/:provider', async (req, res, next) => {
   try {
-    const provider = getPaymentProvider();
-    const event = await provider.handleWebhook(req.body, req.header('x-razorpay-signature') ?? undefined);
-    res.json({ ok: true, event });
+    const result = await paymentService.handlePaymentWebhook({
+      provider: req.params.provider,
+      body: req.body,
+      rawBody: (req as typeof req & { rawBody?: Buffer }).rawBody,
+      signature: req.header('x-razorpay-signature') ?? undefined,
+    });
+    res.json(result);
   } catch (e) {
     next(e);
   }

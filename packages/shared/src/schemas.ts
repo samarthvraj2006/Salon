@@ -21,15 +21,24 @@ export const locationSchema = z.object({
   lng: z.number().min(-180).max(180),
 });
 
+const optionalNumber = z.preprocess(
+  (value) => value === '' || value == null ? undefined : value,
+  z.coerce.number(),
+);
+const optionalBoolean = z.preprocess(
+  (value) => value === 'true' ? true : value === 'false' || value === '' ? false : value,
+  z.coerce.boolean(),
+);
+
 export const salonQuerySchema = z.object({
   q: z.string().optional(),
-  lat: z.coerce.number().optional(),
-  lng: z.coerce.number().optional(),
+  lat: optionalNumber.optional(),
+  lng: optionalNumber.optional(),
   category: z.string().optional(),
   minRating: z.coerce.number().min(0).max(5).optional(),
-  maxPrice: z.coerce.number().optional(),
-  openNow: z.coerce.boolean().optional(),
-  availableToday: z.coerce.boolean().optional(),
+  maxPrice: optionalNumber.optional(),
+  openNow: optionalBoolean.optional(),
+  availableToday: optionalBoolean.optional(),
   sort: z.enum(['nearest', 'rating', 'price', 'earliest']).optional(),
   page: z.coerce.number().min(1).default(1),
   pageSize: z.coerce.number().min(1).max(50).default(20),
@@ -43,12 +52,14 @@ export const slotsQuerySchema = z.object({
   staffId: z.string().optional(),
 });
 
+const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour HH:mm time');
+
 export const createAppointmentSchema = z.object({
   salonId: z.string().cuid(),
   serviceIds: z.array(z.string().cuid()).min(1),
   staffId: z.string().cuid().optional().nullable(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  startTime: z.string(),
+  startTime: timeSchema,
   paymentMethod: z.enum(['PAY_AT_SALON', 'ONLINE']).default('PAY_AT_SALON'),
   couponCode: z.string().optional(),
 });
@@ -59,7 +70,7 @@ export const cancelAppointmentSchema = z.object({
 
 export const rescheduleSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  startTime: z.string(),
+  startTime: timeSchema,
   staffId: z.string().cuid().optional().nullable(),
 });
 
@@ -84,6 +95,7 @@ export const verifyPaymentSchema = z.object({
   paymentId: z.string().cuid(),
   providerOrderId: z.string(),
   providerPaymentId: z.string().optional(),
+  signature: z.string().optional(),
   status: z.enum(['success', 'failure', 'pending']).optional(),
 });
 
